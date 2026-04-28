@@ -1,0 +1,46 @@
+#!/usr/bin/env sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+ELIXIR_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+REPO_ROOT=$(CDPATH= cd -- "$ELIXIR_DIR/.." && pwd)
+
+usage() {
+  printf '%s\n' "Usage: $0 <project-name>"
+  printf '%s\n' ""
+  printf '%s\n' "Configured projects:"
+  printf '%s\n' "  personal-vercell"
+  printf '%s\n' "  gtf-paylater-service"
+}
+
+if [ "${1:-}" = "--list" ]; then
+  usage
+  exit 0
+fi
+
+PROJECT_NAME="${1:-}"
+
+case "$PROJECT_NAME" in
+  personal-vercell)
+    SYMPHONY_UI_PORT="${SYMPHONY_UI_PORT:-4000}"
+    WORKFLOW_PATH="$REPO_ROOT/workflows/personal-vercell/WORKFLOW.md"
+    ;;
+  gtf-paylater-service)
+    SYMPHONY_UI_PORT="${SYMPHONY_UI_PORT:-4001}"
+    WORKFLOW_PATH="$REPO_ROOT/workflows/gtf-paylater-service/WORKFLOW.md"
+    ;;
+  "")
+    usage >&2
+    exit 64
+    ;;
+  *)
+    printf '%s\n' "Unknown Symphony project: $PROJECT_NAME" >&2
+    usage >&2
+    exit 64
+    ;;
+esac
+
+export SYMPHONY_UI_PORT
+
+printf '%s\n' "Starting Symphony project '$PROJECT_NAME' on http://localhost:$SYMPHONY_UI_PORT/"
+exec "$SCRIPT_DIR/symphony-ui" "$WORKFLOW_PATH"

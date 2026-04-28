@@ -1,0 +1,38 @@
+#!/usr/bin/env sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+ELIXIR_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+
+if [ "${SYMPHONY_UI_PORT+x}" = "x" ]; then
+  PRESET_SYMPHONY_UI_PORT=$SYMPHONY_UI_PORT
+fi
+
+if [ -f "$ELIXIR_DIR/.env" ]; then
+  set -a
+  . "$ELIXIR_DIR/.env"
+  set +a
+fi
+
+if [ "${PRESET_SYMPHONY_UI_PORT+x}" = "x" ]; then
+  SYMPHONY_UI_PORT=$PRESET_SYMPHONY_UI_PORT
+  export SYMPHONY_UI_PORT
+fi
+
+: "${SYMPHONY_UI_PORT:=4000}"
+
+if [ "$SYMPHONY_UI_PORT" = "0" ]; then
+  DASHBOARD_URL="an ephemeral port"
+else
+  DASHBOARD_URL="http://localhost:$SYMPHONY_UI_PORT/"
+fi
+
+printf '%s\n' "Starting Symphony UI runner on $DASHBOARD_URL"
+printf '%s\n' "Pass a workflow path as the first argument, or omit it to use WORKFLOW.md."
+
+cd "$ELIXIR_DIR"
+
+exec mix run --no-start -e 'SymphonyElixir.CLI.main(System.argv())' -- \
+  --i-understand-that-this-will-be-running-without-the-usual-guardrails \
+  --port "$SYMPHONY_UI_PORT" \
+  "$@"

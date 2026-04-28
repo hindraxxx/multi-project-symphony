@@ -29,6 +29,8 @@ defmodule SymphonyElixir.HttpServer do
             server: true,
             http: [ip: ip, port: port],
             url: [host: normalize_host(host)],
+            dashboard_mode: :runtime,
+            umbrella_projects: nil,
             orchestrator: orchestrator,
             snapshot_timeout_ms: snapshot_timeout_ms,
             secret_key_base: secret_key_base()

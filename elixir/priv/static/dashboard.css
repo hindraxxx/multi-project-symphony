@@ -267,6 +267,17 @@ pre,
   font-size: 0.88rem;
 }
 
+.metric-value-compact {
+  font-size: 1rem;
+  line-height: 1.25;
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
+}
+
+.metric-grid-inner {
+  margin-top: 1rem;
+}
+
 .section-card {
   border-radius: 24px;
   padding: 1.15rem;
@@ -410,6 +421,39 @@ pre,
 .empty-state {
   margin: 1rem 0 0;
   color: var(--muted);
+}
+
+.project-selector {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.project-selector-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-height: 4rem;
+  padding: 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--card-muted);
+  color: var(--ink);
+}
+
+.project-selector-item-active {
+  border-color: rgba(16, 163, 127, 0.35);
+  background: var(--accent-soft);
+}
+
+.project-selector-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
 }
 
 .error-card {

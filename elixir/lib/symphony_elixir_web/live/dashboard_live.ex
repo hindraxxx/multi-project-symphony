@@ -5,18 +5,18 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   use Phoenix.LiveView, layout: {SymphonyElixirWeb.Layouts, :app}
 
+  alias SymphonyElixir.UmbrellaDashboard
   alias SymphonyElixirWeb.{Endpoint, ObservabilityPubSub, Presenter}
   @runtime_tick_ms 1_000
 
   @impl true
   def mount(_params, _session, socket) do
     socket =
-      socket
-      |> assign(:payload, load_payload())
+      assign_initial_payload(socket)
       |> assign(:now, DateTime.utc_now())
 
     if connected?(socket) do
-      :ok = ObservabilityPubSub.subscribe()
+      unless umbrella_mode?(), do: :ok = ObservabilityPubSub.subscribe()
       schedule_runtime_tick()
     end
 
@@ -26,7 +26,13 @@ defmodule SymphonyElixirWeb.DashboardLive do
   @impl true
   def handle_info(:runtime_tick, socket) do
     schedule_runtime_tick()
-    {:noreply, assign(socket, :now, DateTime.utc_now())}
+
+    socket =
+      socket
+      |> maybe_reload_umbrella_payload()
+      |> assign(:now, DateTime.utc_now())
+
+    {:noreply, socket}
   end
 
   @impl true
@@ -39,6 +45,14 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   @impl true
   def render(assigns) do
+    if Map.get(assigns, :dashboard_mode) == :umbrella do
+      render_umbrella(assigns)
+    else
+      render_runtime(assigns)
+    end
+  end
+
+  defp render_runtime(assigns) do
     ~H"""
     <section class="dashboard-shell">
       <header class="hero-card">
@@ -249,6 +263,235 @@ defmodule SymphonyElixirWeb.DashboardLive do
     """
   end
 
+  defp render_umbrella(assigns) do
+    ~H"""
+    <section class="dashboard-shell">
+      <header class="hero-card">
+        <div class="hero-grid">
+          <div>
+            <p class="eyebrow">
+              Symphony Umbrella
+            </p>
+            <h1 class="hero-title">
+              Project Dashboard
+            </h1>
+            <p class="hero-copy">
+              One local view over project-specific Symphony workers. Worker ports stay separate; this page reads their local status APIs.
+            </p>
+          </div>
+
+          <div class="status-stack">
+            <span class="status-badge status-badge-live">
+              <span class="status-badge-dot"></span>
+              Live
+            </span>
+            <span class="status-badge status-badge-offline">
+              <span class="status-badge-dot"></span>
+              Offline
+            </span>
+          </div>
+        </div>
+      </header>
+
+      <section class="metric-grid">
+        <article class="metric-card">
+          <p class="metric-label">Projects</p>
+          <p class="metric-value numeric"><%= @umbrella_payload.counts.available %>/<%= @umbrella_payload.counts.total %></p>
+          <p class="metric-detail">Reachable project workers.</p>
+        </article>
+
+        <article class="metric-card">
+          <p class="metric-label">Running</p>
+          <p class="metric-value numeric"><%= @umbrella_payload.counts.running %></p>
+          <p class="metric-detail">Active sessions across reachable projects.</p>
+        </article>
+
+        <article class="metric-card">
+          <p class="metric-label">Retrying</p>
+          <p class="metric-value numeric"><%= @umbrella_payload.counts.retrying %></p>
+          <p class="metric-detail">Queued retries across reachable projects.</p>
+        </article>
+
+        <article class="metric-card">
+          <p class="metric-label">Updated</p>
+          <p class="metric-value metric-value-compact numeric"><%= @umbrella_payload.generated_at %></p>
+          <p class="metric-detail">Status refresh timestamp.</p>
+        </article>
+      </section>
+
+      <section class="section-card">
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">Projects</h2>
+            <p class="section-copy">Select a project worker to inspect its current sessions.</p>
+          </div>
+        </div>
+
+        <div class="project-selector">
+          <a
+            :for={project <- @umbrella_payload.projects}
+            class={project_selector_class(project, @selected_project)}
+            href={"?project=#{project.name}"}
+          >
+            <span class="project-selector-title"><%= project.label %></span>
+            <span class={if project.available, do: "state-badge state-badge-active", else: "state-badge state-badge-danger"}>
+              <%= project.status %>
+            </span>
+          </a>
+        </div>
+      </section>
+
+      <%= if @selected_project do %>
+        <section class="section-card">
+          <div class="section-header">
+            <div>
+              <h2 class="section-title"><%= @selected_project.label %></h2>
+              <p class="section-copy">
+                <span class="mono"><%= @selected_project.state_url %></span>
+              </p>
+            </div>
+
+            <a class="issue-link" href={@selected_project.state_url}>Raw state JSON</a>
+          </div>
+
+          <%= if @selected_project.available do %>
+            <section class="metric-grid metric-grid-inner">
+              <article class="metric-card">
+                <p class="metric-label">Running</p>
+                <p class="metric-value numeric"><%= @selected_project.counts.running %></p>
+              </article>
+              <article class="metric-card">
+                <p class="metric-label">Retrying</p>
+                <p class="metric-value numeric"><%= @selected_project.counts.retrying %></p>
+              </article>
+              <article class="metric-card">
+                <p class="metric-label">Total tokens</p>
+                <p class="metric-value numeric"><%= format_int(@selected_project.codex_totals.total_tokens) %></p>
+              </article>
+            </section>
+
+            <div class="table-wrap">
+              <table class="data-table data-table-running">
+                <colgroup>
+                  <col style="width: 12rem;" />
+                  <col style="width: 8rem;" />
+                  <col />
+                  <col style="width: 10rem;" />
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th>Issue</th>
+                    <th>State</th>
+                    <th>Codex update</th>
+                    <th>Tokens</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr :for={entry <- @selected_project.running}>
+                    <td>
+                      <div class="issue-stack">
+                        <span class="issue-id"><%= entry_value(entry, "issue_identifier") %></span>
+                        <span class="muted mono"><%= entry_value(entry, "session_id") || "n/a" %></span>
+                      </div>
+                    </td>
+                    <td>
+                      <span class={state_badge_class(entry_value(entry, "state"))}>
+                        <%= entry_value(entry, "state") || "n/a" %>
+                      </span>
+                    </td>
+                    <td>
+                      <div class="detail-stack">
+                        <span class="event-text"><%= entry_value(entry, "last_message") || entry_value(entry, "last_event") || "n/a" %></span>
+                      </div>
+                    </td>
+                    <td>
+                      <div class="token-stack numeric">
+                        <span>Total: <%= format_int(entry_tokens(entry, "total_tokens")) %></span>
+                        <span class="muted">In <%= format_int(entry_tokens(entry, "input_tokens")) %> / Out <%= format_int(entry_tokens(entry, "output_tokens")) %></span>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <%= if @selected_project.running == [] do %>
+              <p class="empty-state">No active sessions for this project.</p>
+            <% end %>
+          <% else %>
+            <section class="error-card">
+              <h2 class="error-title">Project unavailable</h2>
+              <p class="error-copy">
+                <strong><%= @selected_project.error.code %>:</strong> <%= @selected_project.error.message %>
+              </p>
+            </section>
+          <% end %>
+        </section>
+      <% end %>
+    </section>
+    """
+  end
+
+  @impl true
+  def handle_params(params, _uri, %{assigns: %{dashboard_mode: :umbrella}} = socket) do
+    selected_name = params["project"]
+    {:noreply, assign_selected_project(socket, selected_name)}
+  end
+
+  def handle_params(_params, _uri, socket), do: {:noreply, socket}
+
+  defp assign_initial_payload(socket) do
+    case dashboard_mode() do
+      :umbrella ->
+        payload = load_umbrella_payload()
+
+        socket
+        |> assign(:dashboard_mode, :umbrella)
+        |> assign(:umbrella_payload, payload)
+        |> assign(:selected_project, List.first(payload.projects))
+
+      _ ->
+        socket
+        |> assign(:dashboard_mode, :runtime)
+        |> assign(:payload, load_payload())
+    end
+  end
+
+  defp maybe_reload_umbrella_payload(%{assigns: %{dashboard_mode: :umbrella}} = socket) do
+    selected_name = socket.assigns.selected_project && socket.assigns.selected_project.name
+    payload = load_umbrella_payload()
+
+    socket
+    |> assign(:umbrella_payload, payload)
+    |> assign_selected_project(selected_name)
+  end
+
+  defp maybe_reload_umbrella_payload(socket), do: socket
+
+  defp assign_selected_project(socket, selected_name) do
+    projects = socket.assigns.umbrella_payload.projects
+
+    selected =
+      Enum.find(projects, &(selected_name && &1.name == selected_name)) ||
+        List.first(projects)
+
+    assign(socket, :selected_project, selected)
+  end
+
+  defp load_umbrella_payload do
+    UmbrellaDashboard.status_payload(umbrella_projects())
+  end
+
+  defp umbrella_projects do
+    Endpoint.config(:umbrella_projects) || SymphonyElixir.ProjectRegistry.projects()
+  end
+
+  defp umbrella_mode?, do: dashboard_mode() == :umbrella
+
+  defp dashboard_mode do
+    Endpoint.config(:dashboard_mode) || :runtime
+  end
+
   defp load_payload do
     Presenter.state_payload(orchestrator(), snapshot_timeout_ms())
   end
@@ -319,6 +562,31 @@ defmodule SymphonyElixirWeb.DashboardLive do
       String.contains?(normalized, ["todo", "queued", "pending", "retry"]) -> "#{base} state-badge-warning"
       true -> base
     end
+  end
+
+  defp project_selector_class(project, selected_project) do
+    base = "project-selector-item"
+
+    if selected_project && project.name == selected_project.name do
+      "#{base} project-selector-item-active"
+    else
+      base
+    end
+  end
+
+  defp entry_value(entry, key) when is_map(entry) do
+    entry[key] || entry[String.to_atom(key)]
+  rescue
+    ArgumentError -> entry[key]
+  end
+
+  defp entry_tokens(entry, key) when is_map(entry) do
+    case entry_value(entry, "tokens") do
+      %{} = tokens -> tokens[key] || tokens[String.to_atom(key)] || 0
+      _ -> 0
+    end
+  rescue
+    ArgumentError -> 0
   end
 
   defp schedule_runtime_tick do

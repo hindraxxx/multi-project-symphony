@@ -360,6 +360,8 @@ Fields:
   - REQUIRED for dispatch when `tracker.kind == "linear"`.
 - `active_states` (list of strings)
   - Default: `Todo`, `In Progress`
+  - Values match tracker state names exactly. For Linear, the state category (for example
+    `Unstarted` or `Started`) is not part of eligibility; only the configured state name is used.
 - `terminal_states` (list of strings)
   - Default: `Closed`, `Cancelled`, `Canceled`, `Duplicate`, `Done`
 
@@ -575,6 +577,7 @@ not require recognizing or validating extension fields unless that extension is 
 - `tracker.api_key`: string or `$VAR`, canonical env `LINEAR_API_KEY` when `tracker.kind=linear`
 - `tracker.project_slug`: string, REQUIRED when `tracker.kind=linear`
 - `tracker.active_states`: list of strings, default `["Todo", "In Progress"]`
+  - Matches tracker state names exactly; tracker status category does not determine eligibility.
 - `tracker.terminal_states`: list of strings, default `["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]`
 - `polling.interval_ms`: integer, default `30000`
 - `workspace.root`: path resolved to absolute, default `<system-temp>/symphony_workspaces`

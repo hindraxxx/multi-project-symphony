@@ -1,0 +1,19 @@
+#!/usr/bin/env sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+ELIXIR_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+
+: "${SYMPHONY_UMBRELLA_PORT:=3999}"
+
+printf '%s\n' "Starting Symphony umbrella dashboard on http://localhost:$SYMPHONY_UMBRELLA_PORT/"
+printf '%s\n' "Start project workers separately with ./scripts/symphony-project <project-name>."
+
+cd "$ELIXIR_DIR"
+
+exec mix run --no-start -e '
+Application.put_env(:symphony_elixir, :runtime_mode, :umbrella_dashboard)
+Application.put_env(:symphony_elixir, :umbrella_port, String.to_integer(System.get_env("SYMPHONY_UMBRELLA_PORT") || "3999"))
+{:ok, _started_apps} = Application.ensure_all_started(:symphony_elixir)
+Process.sleep(:infinity)
+'

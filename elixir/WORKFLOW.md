@@ -1,9 +1,11 @@
 ---
 tracker:
   kind: linear
-  project_slug: "symphony-0c79b11b75ea"
+  project_slug: "personal-project-5209dc2232ff"
+  workspace_slug: "hindras-personal"
   active_states:
-    - Todo
+    - OpenSpec Explore
+    - OpenSpec Propose
     - In Progress
     - Merging
     - Rework
@@ -22,14 +24,22 @@ hooks:
     git clone --depth 1 https://github.com/openai/symphony .
     if command -v mise >/dev/null 2>&1; then
       cd elixir && mise trust && mise exec -- mix deps.get
+    else
+      cd elixir && mix deps.get
     fi
   before_remove: |
-    cd elixir && mise exec -- mix workspace.before_remove
+    cd elixir
+    if command -v mise >/dev/null 2>&1; then
+      mise exec -- mix workspace.before_remove
+    else
+      mix workspace.before_remove
+    fi
 agent:
   max_concurrent_agents: 10
   max_turns: 20
 codex:
   command: codex --config shell_environment_policy.inherit=all --config 'model="gpt-5.5"' --config model_reasoning_effort=xhigh app-server
+  read_timeout_ms: 60000
   approval_policy: never
   thread_sandbox: workspace-write
   turn_sandbox_policy:
@@ -100,13 +110,22 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
 - `push`: keep remote branch current and publish updates.
 - `pull`: keep branch updated with latest `origin/main` before handoff.
 - `land`: when ticket reaches `Merging`, explicitly open and follow `.codex/skills/land/SKILL.md`, which includes the `land` loop.
+- `openspec-explore`: think through unclear work without implementation when the ticket is in `OpenSpec Explore`.
+- `openspec-propose`: create OpenSpec proposal artifacts when the ticket is in `OpenSpec Propose`.
+- `openspec-apply`: implement an existing OpenSpec change when the ticket is in `In Progress` and explicitly references one.
 
 ## Status map
 
 - `Backlog` -> out of scope for this workflow; do not modify.
-- `Todo` -> queued; immediately transition to `In Progress` before active work.
-  - Special case: if a PR is already attached, treat as feedback/rework loop (run full PR feedback sweep, address or explicitly push back, revalidate, return to `Human Review`).
+- `Todo` -> staging state for human routing; not included in `active_states` by default and should not be auto-started.
+  - Human operators move small/direct tickets to `In Progress`.
+  - Human operators move unclear tickets to `OpenSpec Explore`.
+  - Human operators move clear but larger tickets to `OpenSpec Propose`.
+- `OpenSpec Explore` -> discovery-only OpenSpec exploration; no implementation and no automatic state transition.
+- `OpenSpec Propose` -> OpenSpec artifact generation only; no implementation and no automatic state transition.
 - `In Progress` -> implementation actively underway.
+  - If the issue explicitly references an existing OpenSpec change, run OpenSpec apply for that change.
+  - Otherwise use the direct implementation workflow.
 - `Human Review` -> PR is attached and validated; waiting on human approval.
 - `Merging` -> approved by human; execute the `land` skill flow (do not call `gh pr merge` directly).
 - `Rework` -> reviewer requested changes; planning + implementation required.
@@ -117,9 +136,10 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
 1. Fetch the issue by explicit ticket ID.
 2. Read the current state.
 3. Route to the matching flow:
-   - `Backlog` -> do not modify issue content/state; stop and wait for human to move it to `Todo`.
-   - `Todo` -> immediately move to `In Progress`, then ensure bootstrap workpad comment exists (create if missing), then start execution flow.
-     - If PR is already attached, start by reviewing all open PR comments and deciding required changes vs explicit pushback responses.
+   - `Backlog` -> do not modify issue content/state; stop and wait for human to move it to a workflow-active state.
+   - `Todo` -> do not modify issue content/state; stop and wait for human to move it to `OpenSpec Explore`, `OpenSpec Propose`, or `In Progress`.
+   - `OpenSpec Explore` -> run OpenSpec explore flow only.
+   - `OpenSpec Propose` -> run OpenSpec propose flow only.
    - `In Progress` -> continue execution flow from current scratchpad comment.
    - `Human Review` -> wait and poll for decision/review updates.
    - `Merging` -> on entry, open and follow `.codex/skills/land/SKILL.md`; do not call `gh pr merge` directly.
@@ -128,13 +148,39 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
 4. Check whether a PR already exists for the current branch and whether it is closed.
    - If a branch PR exists and is `CLOSED` or `MERGED`, treat prior branch work as non-reusable for this run.
    - Create a fresh branch from `origin/main` and restart execution flow as a new attempt.
-5. For `Todo` tickets, do startup sequencing in this exact order:
-   - `update_issue(..., state: "In Progress")`
-   - find/create `## Codex Workpad` bootstrap comment
-   - only then begin analysis/planning/implementation work.
+5. Do not infer that a ticket needs `OpenSpec Explore` or `OpenSpec Propose` based on size, ambiguity, labels, or wording. The user selects those routes by moving the ticket into the matching Linear state.
 6. Add a short comment if state and issue content are inconsistent, then proceed with the safest flow.
 
-## Step 1: Start/continue execution (Todo or In Progress)
+## Step 0A: OpenSpec Explore flow
+
+Use this flow only when the current issue state is exactly `OpenSpec Explore`.
+
+1. Find or create the single persistent `## Codex Workpad` comment.
+2. Read the issue body, comments, relevant repository context, and any referenced OpenSpec change artifacts.
+3. Explore the problem space and capture concise findings in the workpad:
+   - clarified problem statement,
+   - key options and trade-offs,
+   - risks and unknowns,
+   - recommended next state when obvious (`OpenSpec Propose` or `In Progress`).
+4. Do not write application implementation code.
+5. Do not create a PR, commit, push, or move the Linear issue to another state.
+6. Final message must report the exploration output and that the issue is waiting for human routing.
+
+## Step 0B: OpenSpec Propose flow
+
+Use this flow only when the current issue state is exactly `OpenSpec Propose`.
+
+1. Find or create the single persistent `## Codex Workpad` comment.
+2. Derive a kebab-case OpenSpec change name from an explicit issue field/reference when present; otherwise derive it from the issue title.
+3. If the target OpenSpec change already exists, continue it instead of creating a duplicate.
+4. Create or complete the OpenSpec artifacts required for apply-readiness, normally proposal, design, specs, and tasks.
+5. Validate the OpenSpec change with `openspec validate <change-name> --strict` when artifacts are complete.
+6. Update the workpad with the change name, artifact paths, validation result, and the fact that implementation has not started.
+7. Do not write application implementation code.
+8. Do not create a PR, commit, push, or move the Linear issue to another state.
+9. Final message must report the created/updated OpenSpec change and that the issue is waiting for human routing.
+
+## Step 1: Start/continue execution (In Progress only)
 
 1.  Find or create a single persistent scratchpad comment for the issue:
     - Search existing comments for a marker header: `## Codex Workpad`.
@@ -142,7 +188,7 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
     - If found, reuse that comment; do not create a new workpad comment.
     - If not found, create one workpad comment and use it for all updates.
     - Persist the workpad comment ID and only write progress updates to that ID.
-2.  If arriving from `Todo`, do not delay on additional status transitions: the issue should already be `In Progress` before this step begins.
+2.  Confirm the issue is currently `In Progress`; otherwise return to the matching state-specific flow.
 3.  Immediately reconcile the workpad before new edits:
     - Check off items that are already done.
     - Expand/fix the plan so it is comprehensive for current scope.
@@ -193,47 +239,51 @@ Use this only when completion is blocked by missing required tools or missing au
   - exact human action needed to unblock.
 - Keep the brief concise and action-oriented; do not add extra top-level comments outside the workpad.
 
-## Step 2: Execution phase (Todo -> In Progress -> Human Review)
+## Step 2: Execution phase (In Progress -> Human Review)
 
 1.  Determine current repo state (`branch`, `git status`, `HEAD`) and verify the kickoff `pull` sync result is already recorded in the workpad before implementation continues.
-2.  If current issue state is `Todo`, move it to `In Progress`; otherwise leave the current state unchanged.
+2.  Leave the current issue state unchanged; `In Progress` is the implementation entry state.
 3.  Load the existing workpad comment and treat it as the active execution checklist.
-    - Edit it liberally whenever reality changes (scope, risks, validation approach, discovered tasks).
-4.  Implement against the hierarchical TODOs and keep the comment current:
+     - Edit it liberally whenever reality changes (scope, risks, validation approach, discovered tasks).
+4.  Determine whether the issue explicitly references an existing OpenSpec change, using clear text such as `OpenSpec change: <change-name>` or `Use OpenSpec: <change-name>` in the issue body or workpad.
+    - If an existing OpenSpec change is referenced, run the OpenSpec apply workflow for that change and use its tasks as the implementation checklist.
+    - If no existing OpenSpec change is referenced, use the direct implementation workflow.
+    - Do not create OpenSpec Explore or Propose artifacts from `In Progress`; if requirements are insufficient, record the blocker in the workpad and follow the blocked workflow.
+5.  Implement against the hierarchical TODOs and keep the comment current:
     - Check off completed items.
     - Add newly discovered items in the appropriate section.
     - Keep parent/child structure intact as scope evolves.
     - Update the workpad immediately after each meaningful milestone (for example: reproduction complete, code change landed, validation run, review feedback addressed).
     - Never leave completed work unchecked in the plan.
-    - For tickets that started as `Todo` with an attached PR, run the full PR feedback sweep protocol immediately after kickoff and before new feature work.
-5.  Run validation/tests required for the scope.
+    - For tickets that already have an attached PR at kickoff, run the full PR feedback sweep protocol immediately after kickoff and before new feature work.
+6.  Run validation/tests required for the scope.
     - Mandatory gate: execute all ticket-provided `Validation`/`Test Plan`/ `Testing` requirements when present; treat unmet items as incomplete work.
     - Prefer a targeted proof that directly demonstrates the behavior you changed.
     - You may make temporary local proof edits to validate assumptions (for example: tweak a local build input for `make`, or hardcode a UI account / response path) when this increases confidence.
     - Revert every temporary proof edit before commit/push.
     - Document these temporary proof steps and outcomes in the workpad `Validation`/`Notes` sections so reviewers can follow the evidence.
     - If app-touching, run `launch-app` validation and capture/upload media via `github-pr-media` before handoff.
-6.  Re-check all acceptance criteria and close any gaps.
-7.  Before every `git push` attempt, run the required validation for your scope and confirm it passes; if it fails, address issues and rerun until green, then commit and push changes.
-8.  Attach PR URL to the issue (prefer attachment; use the workpad comment only if attachment is unavailable).
+7.  Re-check all acceptance criteria and close any gaps.
+8.  Before every `git push` attempt, run the required validation for your scope and confirm it passes; if it fails, address issues and rerun until green, then commit and push changes.
+9.  Attach PR URL to the issue (prefer attachment; use the workpad comment only if attachment is unavailable).
     - Ensure the GitHub PR has label `symphony` (add it if missing).
-9.  Merge latest `origin/main` into branch, resolve conflicts, and rerun checks.
-10. Update the workpad comment with final checklist status and validation notes.
+10. Merge latest `origin/main` into branch, resolve conflicts, and rerun checks.
+11. Update the workpad comment with final checklist status and validation notes.
     - Mark completed plan/acceptance/validation checklist items as checked.
     - Add final handoff notes (commit + validation summary) in the same workpad comment.
     - Do not include PR URL in the workpad comment; keep PR linkage on the issue via attachment/link fields.
     - Add a short `### Confusions` section at the bottom when any part of task execution was unclear/confusing, with concise bullets.
     - Do not post any additional completion summary comment.
-11. Before moving to `Human Review`, poll PR feedback and checks:
+12. Before moving to `Human Review`, poll PR feedback and checks:
     - Read the PR `Manual QA Plan` comment (when present) and use it to sharpen UI/runtime test coverage for the current change.
     - Run the full PR feedback sweep protocol.
     - Confirm PR checks are passing (green) after the latest changes.
     - Confirm every required ticket-provided validation/test-plan item is explicitly marked complete in the workpad.
     - Repeat this check-address-verify loop until no outstanding comments remain and checks are fully passing.
     - Re-open and refresh the workpad before state transition so `Plan`, `Acceptance Criteria`, and `Validation` exactly match completed work.
-12. Only then move issue to `Human Review`.
+13. Only then move issue to `Human Review`.
     - Exception: if blocked by missing required non-GitHub tools/auth per the blocked-access escape hatch, move to `Human Review` with the blocker brief and explicit unblock actions.
-13. For `Todo` tickets that already had a PR attached at kickoff:
+14. For tickets that already had a PR attached at kickoff:
     - Ensure all existing PR feedback was reviewed and resolved, including inline review comments (code changes or explicit, justified pushback response).
     - Ensure branch was pushed with any required updates.
     - Then move to `Human Review`.
@@ -255,7 +305,7 @@ Use this only when completion is blocked by missing required tools or missing au
 4. Remove the existing `## Codex Workpad` comment from the issue.
 5. Create a fresh branch from `origin/main`.
 6. Start over from the normal kickoff flow:
-   - If current issue state is `Todo`, move it to `In Progress`; otherwise keep the current state.
+   - Confirm the issue is in `Rework` or `In Progress`; otherwise keep the current state and route through the matching flow.
    - Create a new bootstrap `## Codex Workpad` comment.
    - Build a fresh plan/checklist and execute end-to-end.
 
@@ -273,7 +323,8 @@ Use this only when completion is blocked by missing required tools or missing au
 
 - If the branch PR is already closed/merged, do not reuse that branch or prior implementation state for continuation.
 - For closed/merged branch PRs, create a new branch from `origin/main` and restart from reproduction/planning as if starting fresh.
-- If issue state is `Backlog`, do not modify it; wait for human to move to `Todo`.
+- If issue state is `Backlog` or `Todo`, do not modify it; wait for human to move to `OpenSpec Explore`, `OpenSpec Propose`, or `In Progress`.
+- Do not automatically create OpenSpec Explore or OpenSpec Propose artifacts from `Todo`, `In Progress`, or `Rework`; those routes are selected only by the matching Linear states.
 - Do not edit the issue body/description for planning or progress tracking.
 - Use exactly one persistent workpad comment (`## Codex Workpad`) per issue.
 - If comment editing is unavailable in-session, use the update script. Only report blocked if both MCP editing and script-based editing are unavailable.

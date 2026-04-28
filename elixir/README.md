@@ -40,8 +40,11 @@ Symphony stops the active agent for that issue and cleans up matching workspaces
    - To get your project's slug, right-click the project and copy its URL. The slug is part of the
      URL.
    - When creating a workflow based on this repo, note that it depends on non-standard Linear
-     issue statuses: "Rework", "Human Review", and "Merging". You can customize them in
-     Team Settings → Workflow in Linear.
+     issue statuses: "OpenSpec Explore", "OpenSpec Propose", "Rework", "Human Review", and
+     "Merging". You can customize them in Team Settings → Workflow in Linear.
+   - Linear status names must match `WORKFLOW.md` exactly. In the default local workflow, `Todo` is
+     a staging state and is not listed in `active_states`; move small tickets to `In Progress`,
+     unclear tickets to `OpenSpec Explore`, and clear larger tickets to `OpenSpec Propose`.
 6. Follow the instructions below to install the required runtime dependencies and start the service.
 
 ## Prerequisites
@@ -64,6 +67,17 @@ mise exec -- mix setup
 mise exec -- mix build
 mise exec -- ./bin/symphony ./WORKFLOW.md
 ```
+
+For a UI-first local run, use the tracked shell runner. It loads `elixir/.env` when present, enables
+the Phoenix dashboard on `SYMPHONY_UI_PORT` (default `4000`), and forwards any extra arguments to the
+regular CLI:
+
+```bash
+mise exec -- ./scripts/symphony-ui ./WORKFLOW.md
+open http://localhost:4000/
+```
+
+Use a different port with `SYMPHONY_UI_PORT=4001 ./scripts/symphony-ui ./WORKFLOW.md`.
 
 ## Configuration
 
@@ -110,6 +124,9 @@ Title: {{ issue.title }} Body: {{ issue.description }}
 Notes:
 
 - If a value is missing, defaults are used.
+- `tracker.active_states` controls which Linear statuses Symphony polls. Status category in Linear
+  does not matter; the exact status name does. Use this to make `Todo` a staging state while still
+  picking up `OpenSpec Explore`, `OpenSpec Propose`, `In Progress`, `Merging`, and `Rework`.
 - Safer Codex defaults are used when policy fields are omitted:
   - `codex.approval_policy` defaults to `{"reject":{"sandbox_approval":true,"rules":true,"mcp_elicitations":true}}`
   - `codex.thread_sandbox` defaults to `workspace-write`

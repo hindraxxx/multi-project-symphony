@@ -6,6 +6,7 @@ defmodule SymphonyElixir.ExtensionsTest do
 
   alias SymphonyElixir.Linear.Adapter
   alias SymphonyElixir.Tracker.Memory
+  alias SymphonyElixir.UmbrellaDashboard
 
   @endpoint SymphonyElixirWeb.Endpoint
 
@@ -607,6 +608,119 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "snapshot_unavailable"
   end
 
+  test "umbrella dashboard aggregates reachable and unavailable project status" do
+    projects = [
+      %{name: "alpha", label: "Alpha", state_url: "http://alpha.local/api/v1/state", port: 4100},
+      %{name: "beta", label: "Beta", state_url: "http://beta.local/api/v1/state", port: 4101}
+    ]
+
+    client = fn
+      "http://alpha.local/api/v1/state", _opts ->
+        {:ok,
+         %{
+           status: 200,
+           body: %{
+             "counts" => %{"running" => 2, "retrying" => 1},
+             "running" => [
+               %{
+                 "issue_identifier" => "ALPHA-1",
+                 "state" => "In Progress",
+                 "tokens" => %{"input_tokens" => 1, "output_tokens" => 2, "total_tokens" => 3}
+               }
+             ],
+             "retrying" => [],
+             "codex_totals" => %{
+               "input_tokens" => 4,
+               "output_tokens" => 5,
+               "total_tokens" => 9,
+               "seconds_running" => 10
+             }
+           }
+         }}
+
+      "http://beta.local/api/v1/state", _opts ->
+        {:error, :econnrefused}
+    end
+
+    payload = UmbrellaDashboard.status_payload(projects, client)
+
+    assert payload.counts == %{total: 2, available: 1, unavailable: 1, running: 2, retrying: 1}
+    assert [alpha, beta] = payload.projects
+    assert alpha.available == true
+    assert alpha.running |> List.first() |> Map.fetch!("issue_identifier") == "ALPHA-1"
+    assert beta.available == false
+    assert beta.error.code == "unreachable"
+  end
+
+  test "umbrella dashboard fetches project status concurrently" do
+    projects =
+      for index <- 1..3 do
+        %{name: "project-#{index}", label: "Project #{index}", state_url: "http://project-#{index}.local/api/v1/state"}
+      end
+
+    client = fn _url, _opts ->
+      Process.sleep(100)
+
+      {:ok,
+       %{
+         status: 200,
+         body: %{
+           "counts" => %{"running" => 1, "retrying" => 0},
+           "running" => [],
+           "retrying" => [],
+           "codex_totals" => %{"input_tokens" => 0, "output_tokens" => 0, "total_tokens" => 0}
+         }
+       }}
+    end
+
+    {elapsed_us, payload} = :timer.tc(fn -> UmbrellaDashboard.status_payload(projects, client) end)
+
+    assert payload.counts.running == 3
+    assert elapsed_us < 250_000
+  end
+
+  test "umbrella dashboard treats api error payloads as unavailable" do
+    projects = [
+      %{name: "broken", label: "Broken", state_url: "http://broken.local/api/v1/state"}
+    ]
+
+    client = fn _url, _opts ->
+      {:ok,
+       %{
+         status: 200,
+         body: %{
+           "error" => %{
+             "code" => "snapshot_unavailable",
+             "message" => "Snapshot unavailable"
+           }
+         }
+       }}
+    end
+
+    payload = UmbrellaDashboard.status_payload(projects, client)
+
+    assert payload.counts == %{total: 1, available: 0, unavailable: 1, running: 0, retrying: 0}
+    assert [project] = payload.projects
+    assert project.available == false
+    assert project.error == %{code: "snapshot_unavailable", message: "Snapshot unavailable"}
+  end
+
+  test "umbrella dashboard liveview renders project selector and unavailable projects" do
+    projects = [
+      %{name: "alpha", label: "Alpha", state_url: "http://127.0.0.1:1/api/v1/state", port: 4100},
+      %{name: "beta", label: "Beta", state_url: "http://127.0.0.1:2/api/v1/state", port: 4101}
+    ]
+
+    start_test_endpoint(dashboard_mode: :umbrella, umbrella_projects: projects)
+
+    html = html_response(get(build_conn(), "/"), 200)
+
+    assert html =~ "Project Dashboard"
+    assert html =~ "Alpha"
+    assert html =~ "Beta"
+    assert html =~ "Project unavailable"
+  end
+
   test "http server serves embedded assets, accepts form posts, and rejects invalid hosts" do
     spec = HttpServer.child_spec(port: 0)
     assert spec.id == HttpServer
@@ -634,7 +748,20 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot, refresh: refresh})
 
+    Application.put_env(
+      :symphony_elixir,
+      SymphonyElixirWeb.Endpoint,
+      Keyword.merge(
+        Application.get_env(:symphony_elixir, SymphonyElixirWeb.Endpoint, []),
+        dashboard_mode: :umbrella,
+        umbrella_projects: [%{name: "stale", label: "Stale", state_url: "http://127.0.0.1:1"}]
+      )
+    )
+
     start_supervised!({HttpServer, server_opts})
+
+    assert SymphonyElixirWeb.Endpoint.config(:dashboard_mode) == :runtime
+    assert SymphonyElixirWeb.Endpoint.config(:umbrella_projects) == nil
 
     port = wait_for_bound_port()
     assert port == HttpServer.bound_port()
